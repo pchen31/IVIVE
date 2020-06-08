@@ -1,25 +1,25 @@
-## Load packages 
-pacman::p_load(pacman, dplyr, readxl, writexl, lubridate) 
+pacman::p_load(pacman, dplyr, readxl, writexl, lubridate, stringr) 
 
-## Import raw data (alternatively use GUI: Right hand panel > Environment > Import Dataset > Choose "from excel" > Browse
+# Import Data
 Rawdata <- read_excel("CLint_Raw data.xlsx", sheet = "Rawdata")
-#View(Rawdata)
-
 Df_SF_Qh <- read_excel("CLint_Raw data.xlsx", sheet = "SF_Qh")
-#View(Df_SF_Qh)
-
 Df_Exp_Unit <- read_excel("CLint_Raw data.xlsx", sheet = "Exp_Unit")
-#View(Df_Exp_Unit)
 
-### Set variables for experimental settings and columns in raw data
+# Create Variables
 Val_protein_conc <- as.numeric(Df_Exp_Unit$Value[1])                 # Protein concentration used in microsomal stability assay
 Val_cell_density <- as.numeric(Df_Exp_Unit$Value[2])                 # Cell density used in hepatocyte stability assay
 Val_cpd_conc <- as.numeric(Df_Exp_Unit$Value[3])                     # Substrate concentration used in the assay
-Val_fu_inc_digit <- as.numeric(Df_Exp_Unit$Value[4])                 # Number of decimal places for fu,inc values
-Val_CLint_s_digit <- as.numeric(Df_Exp_Unit$Value[5])                # Number of decimal places for fu,inc values
-Val_CLh_digit <- as.numeric(Df_Exp_Unit$Value[6])                    # Number of decimal places for fu,inc values
+Val_fu_digit <- as.numeric(Df_Exp_Unit$Value[4])                     # Number of decimal places for fu values
+Val_CLint_s_digit <- as.numeric(Df_Exp_Unit$Value[5])                # Number of decimal places for CLint,s values
+Val_CLh_digit <- as.numeric(Df_Exp_Unit$Value[6])                    # Number of decimal places for CLh values
 Val_pH_plasma <- as.numeric(Df_Exp_Unit$Value[11])                   # pH of plasma, for F1 calculation
 Val_pH_heps <- as.numeric(Df_Exp_Unit$Value[12])                     # pH of hepatoctytes (inside the cells), for F1 calculation
+Val_CLint_u_LM_low_CL <- as.numeric(Df_Exp_Unit$Value[13])           # Cutoff of CLint,u as low CL for liver microsomes
+Val_CLint_u_LM_high_CL <- as.numeric(Df_Exp_Unit$Value[14])          # Cutoff of CLint,u as high CL for liver microsomes
+Val_CLint_u_hep_low_CL <- as.numeric(Df_Exp_Unit$Value[15])          # Cutoff of CLint,u as low CL for hepacoytes
+Val_CLint_u_hep_high_CL <- as.numeric(Df_Exp_Unit$Value[16])         # Cutoff of CLint,u as high CL for hepatocytes
+Val_ER_low_CL <- as.numeric(Df_Exp_Unit$Value[17])                   # Cutoff of ER as low CL
+Val_ER_high_CL <- as.numeric(Df_Exp_Unit$Value[18])                  # Cutoff of ER as low CL
 Val_CLh_unit_conv <- ifelse(Df_Exp_Unit$Unit[10] == "L/hr/kg",       # Value to convert CLh to CLint based on desired CLh unit (L/hr/kg or mL/min/kg)
                             60/1000000, 1/1000)
 
@@ -27,8 +27,8 @@ Num_cpd = nrow(Rawdata)                                              # Calculate
 
 Col_ID <- Rawdata$ID
 Col_species <- Rawdata$Species
-Col_matrix <- Rawdata$Matrix
-Col_clint <- Rawdata$CLint
+Col_clint_lm <- Rawdata$CLint_LM
+Col_clint_hep <- Rawdata$CLint_hep
 Col_CLobs <- Rawdata$CLobs
 Col_exp_fu_p <- Rawdata$exp_fup
 Col_c_fup <- Rawdata$c_fup
@@ -41,172 +41,118 @@ Col_c_logD <- Rawdata$c_LogD
 Col_exp_pKa <- Rawdata$ex_pKa
 Col_c_pKa <- Rawdata$c_pKa
 Col_pKa_type <- Rawdata$pKa_Type
+Col_exp_date <- Rawdata$Exp_Date
 
-# Get week, month and year of the metabolic stability experiment
+# Get Experiment Dates
 Rawdata <- mutate(Rawdata, Exp_Week = week(Rawdata$Exp_Date),
                            Exp_Month_digit = month(Rawdata$Exp_Date),
                            Exp_Month = months(Rawdata$Exp_Date, abbreviate = TRUE),
                            Exp_Year = year(Rawdata$Exp_Date))
 
 Rawdata$Exp_Date <- as_date(Rawdata$Exp_Date)               # Convert exp date back to only yyyy-mm-dd
+head(Rawdata)
 
-## Create function for different fu,inc (i.e. fu,mic & fu,hep) prediction methods, input = logP/D
+# Create Functions for fu,inc
+cfu_mic_Austin <- function(LogP_D, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.56*LogP_D-1.41)+1)) 
+                                                           zval <- round(zval, digits = Digits) 
+                                                           return(zval)} 
+
+cfu_mic_Houston <- function(LogP_D, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.072*LogP_D^2+0.067*LogP_D-1.126)+1)) 
+                                                            zval <- round(zval, digits = Digits) 
+                                                            return(zval)}
+
+cfu_mic_Turner.acidic <- function(LogP, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.20*LogP-1.54)+1)) 
+                                                                zval <- round(zval, digits = Digits) 
+                                                                return(zval)} 
+
+cfu_mic_Turner.neutral <- function(LogP, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.46*LogP-1.51)+1)) 
+                                                                 zval <- round(zval, digits = Digits) 
+                                                                 return(zval)} 
+
+cfu_mic_Turner.basic <- function(LogP, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.58*LogP-2.02)+1)) 
+                                                               zval <- round(zval, digits = Digits) 
+                                                               return(zval)} 
+
 cfu_hep_Austin <- function(LogP_D, Digits) { zval <- (1/(10^(0.4*LogP_D-1.38)+1)) 
                                              zval <- round(zval, digits = Digits)
                                              return(zval)} 
 
 cfu_hep_Austin.fumic <- function(LogP_D, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.56*LogP_D-1.41)+1))
-                                                   zval <- (1/(10^((log10((1-zval)/zval)-0.06)/1.52)+1))
-                                                   zval <- round(zval, digits = Digits)
-                                                   return(zval)} 
+                                                                 zval <- (1/(10^((log10((1-zval)/zval)-0.06)/1.52)+1))
+                                                                 zval <- round(zval, digits = Digits)
+                                                                 return(zval)} 
 
-cfu_hep_Kilford <- function(LogP_D, Digits) { zval <- (1/(125*0.005*10^(0.072*LogP_D^2+0.067*LogP_D-1.126)+1))      # VR value is 0.005 for 1M cells/mL incubation
+cfu_hep_Kilford <- function(LogP_D, Digits) { zval <- (1/(125*0.005*10^(0.072*LogP_D^2+0.067*LogP_D-1.126)+1))      
                                               zval <- round(zval, digits = Digits) 
-                                              return(zval)} 
+                                              return(zval)}                 # VR value is 0.005 for 1M cells/mL incubation
 
-cfu_mic_Austin <- function(LogP_D, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.56*LogP_D-1.41)+1)) 
-                                             zval <- round(zval, digits = Digits) 
-                                             return(zval)} 
+# Create a new column: cLogD for acidic, cLogP for basic and neutral compounds 
+Rawdata <- Rawdata %>% mutate(c_LogP_D = ifelse(pKa_Type %in% "Acidic", c_LogD, c_LogP)) 
+head(Rawdata)
 
-cfu_mic_Houston <- function(LogP_D, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.072*LogP_D^2+0.067*LogP_D-1.126)+1)) 
-                                              zval <- round(zval, digits = Digits) 
-                                              return(zval)} 
+# Calculate fu,inc
+Rawdata <- Rawdata %>% mutate(cfu_mic_Austin_logP_D = cfu_mic_Austin(c_LogP_D, Val_protein_conc, Val_fu_digit),
+                              cfu_mic_Houston_logP_D = cfu_mic_Houston(c_LogP_D, Val_protein_conc, Val_fu_digit),
+                              cfu_mic_Turner_logP = ifelse(pKa_Type == "Acidic", cfu_mic_Turner.acidic(c_LogP, Val_protein_conc, Val_fu_digit),
+                                                           ifelse(pKa_Type == "Basic", cfu_mic_Turner.basic(c_LogP, Val_protein_conc, Val_fu_digit),
+                                                                  cfu_mic_Turner.neutral(c_LogP, Val_protein_conc, Val_fu_digit))),
+                              cfu_hep_Austin_logP_D = cfu_hep_Austin(c_LogP_D, Val_fu_digit),
+                              cfu_hep_Austin_fu_mic = cfu_hep_Austin.fumic(c_LogP_D, Val_protein_conc, Val_fu_digit), 
+                              cfu_hep_Kilford_logP_D = cfu_hep_Kilford(c_LogP_D, Val_fu_digit) 
+                                )
 
-cfu_mic_Turner.basic <- function(LogP, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.58*LogP-2.02)+1)) 
-                                                 zval <- round(zval, digits = Digits) 
-                                                 return(zval)} 
+# Calculate CLint,u
+Rawdata <- Rawdata %>% mutate(CLint_u_LM_Austin = CLint_LM/cfu_mic_Austin_logP_D,
+                              CLint_u_LM_Houston = CLint_LM/cfu_mic_Houston_logP_D,
+                              CLint_u_LM_Turner = CLint_LM/cfu_mic_Turner_logP,
+                              CLint_u_hep_Austin = CLint_hep/cfu_hep_Austin_logP_D,
+                              CLint_u_hep_Austin_fumic = CLint_hep/cfu_hep_Austin_fu_mic,
+                              CLint_u_hep_Kilford = CLint_hep/cfu_hep_Kilford_logP_D)
 
-cfu_mic_Turner.acidic <- function(LogP, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.20*LogP-1.54)+1)) 
-                                                  zval <- round(zval, digits = Digits) 
-                                                  return(zval)} 
-
-cfu_mic_Turner.neutral <- function(LogP, Protein_conc, Digits) { zval <- (1/(Protein_conc*10^(0.46*LogP-1.51)+1)) 
-                                                   zval <- round(zval, digits = Digits) 
-                                                   return(zval)} 
-
-#Test to see if the fuctions are working
-#cfu_hep_Austin(3.59, 4)
-#cfu_hep_Austin.fumic(3.59, 0.25, 4)
-#cfu_hep_Kilford(3.59, 4)
-#cfu_mic_Austin(3.59, 0.25, 4)
-#cfu_mic_Houston(3.59, 0.25, 4)
-#cfu_mic_Turner.basic(3.59, 0.25, 4)
-#cfu_mic_Turner.acidic(3.59, 0.25, 4)
-#cfu_mic_Turner.neutral(3.59, 0.25, 4)
-
-## Prepare lists for fu,inc calculation
-
-List_c_log_P_D <- 1                                             # Initialize the variable for loop
-for (x in 1:Num_cpd) {                                        # Make a list to select logD for acidic compounds, and logP for others (i.e. basic, neutral or NA)
-  List_c_log_P_D[x] <- ifelse(Col_pKa_type[x] %in% c("Basic", "Neutral", NA), Col_c_logP[x], 
-                            Col_c_logD[x]) }
-
-Rawdata <- mutate(Rawdata, LogP_D = List_c_log_P_D)           # Combine the logP/D list into data frame for fu,inc calculation
-
-## Perform fu,inc calculation
-List_cfu_hep_Austin <- sapply(List_c_log_P_D, 
-                              cfu_hep_Austin, Digits = Val_fu_inc_digit)
-
-List_cfu_hep_Austin_fumic <- sapply(List_c_log_P_D, 
-                                    cfu_hep_Austin.fumic, Protein_conc = Val_protein_conc, Digits = Val_fu_inc_digit)
-
-List_cfu_hep_Kilford <- sapply(List_c_log_P_D, 
-                               cfu_hep_Kilford, Digits = Val_fu_inc_digit)
-
-List_cfu_mic_Austin <- sapply(List_c_log_P_D, 
-                              cfu_mic_Austin, Protein_conc = Val_protein_conc, Digits = Val_fu_inc_digit)
-
-List_cfu_mic_Houston <- sapply(List_c_log_P_D, 
-                               cfu_mic_Houston, Protein_conc = Val_protein_conc, Digits = Val_fu_inc_digit)
-
-List_cfu_mic_Turner <- 1                                      # Initialize the variable for loop
-for (x in 1:Num_cpd) {                                        # Calculate fu,mic using Turner method; logP only for all pKa classes
-  zval <- Col_c_logP[x]
-  List_cfu_mic_Turner[x] <- ifelse(Col_pKa_type[x] %in% "Basic", cfu_mic_Turner.basic(zval, Val_protein_conc, Val_fu_inc_digit),
-                                  ifelse(Col_pKa_type[x] %in% c("Neutral", NA), cfu_mic_Turner.neutral(zval, Val_protein_conc, Val_fu_inc_digit), 
-                                         cfu_mic_Turner.acidic(zval, Val_protein_conc, Val_fu_inc_digit)))}
-
-## Combine fu,mic and fu,hep into data frame
-Rawdata <- mutate(Rawdata, cfu_hep_Austin_logP_D = List_cfu_hep_Austin,
-                           cfu_hep_Austin_fu_mic = List_cfu_hep_Austin_fumic, 
-                           cfu_hep_Kilford_logP_D = List_cfu_hep_Kilford, 
-                           cfu_mic_Austin_logP_D = List_cfu_mic_Austin,
-                           cfu_mic_Houston_logP_D = List_cfu_mic_Houston,
-                           cfu_mic_Turner_logP = List_cfu_mic_Turner)
-
-## Create function to get SF1, SF2 and Qh based on species; need "" for argument (e.g. type "Rat" instead of Rat)
-SF1 <- function(Species) { zchr <- paste(Species)
-                           zval = grep(zchr, Df_SF_Qh$Species) 
+# Create Functions to Get SF & Qh Based on Species, and Extraploate CLint to CLint,s 
+SF1 <- function(Species) { zval = which(Df_SF_Qh$Species %in% Species) 
                            zval <- Df_SF_Qh[zval, 2]
-                           zval <- as.numeric(zval)
+                           zval <- as.numeric(unlist(zval))
                            return(zval)}
 
-SF2.hep <- function(Species) { zchr <- paste(Species)
-                               zval = grep(zchr, Df_SF_Qh$Species) 
+SF2.hep <- function(Species) { zval = which(Df_SF_Qh$Species %in% Species)
                                zval <- Df_SF_Qh[zval, 3]
-                               zval <- as.numeric(zval)
+                               zval <- as.numeric(unlist(zval))
                                return(zval)}
 
-SF2.LM <- function(Species) { zchr <- paste(Species)
-                              zval = grep(zchr, Df_SF_Qh$Species) 
+SF2.LM <- function(Species) { zval = which(Df_SF_Qh$Species %in% Species) 
                               zval <- Df_SF_Qh[zval, 4]
-                              zval <- as.numeric(zval)
+                              zval <- as.numeric(unlist(zval))
                               return(zval)}
 
-Qh <- function(Species) { zchr <- paste(Species)
-                          zval = grep(zchr, Df_SF_Qh$Species) 
+Qh <- function(Species) { zval = which(Df_SF_Qh$Species %in% Species) 
                           zval <- Df_SF_Qh[zval, 5]
-                          zval <- as.numeric(zval)
+                          zval <- as.numeric(unlist(zval))
                           return(zval)}
 
-#Test to see if the fuctions are working
-#SF1("Rat")
-#SF2.hep("Rat")
-#SF2.LM("Rat")
-#Qh("Rat")
-#SF1("Human")
-#SF2.hep("Human")
-#SF2.LM("Human")
-#Qh("Human")
+CLint_scaled.LM <- function(CLint, Species, Digits) { zval = CLint*SF1(Species)*SF2.LM(Species)*Val_CLh_unit_conv     
+                                                      zval <- round(zval, digits = Digits)
+                                                      return(zval)}
 
-# Calculate scaled CLint
-CLint_scaled.hep <- function(CLint, Species, Cell_density, Digits) { zchr <- paste(Species)             
-                                                                     zval = CLint*SF1(zchr)*SF2.hep(zchr)/Cell_density*Val_CLh_unit_conv     
-                                                                     zval <- round(zval, digits = Digits)
-                                                                     return(zval)}
+CLint_scaled.hep <- function(CLint, Species, Digits) { zval = CLint*SF1(Species)*SF2.hep(Species)*Val_CLh_unit_conv     
+                                                       zval <- round(zval, digits = Digits)
+                                                       return(zval)}
 
-CLint_scaled.LM <- function(CLint, Species, Protein_conc, Digits) { zchr <- paste(Species)             
-                                                                    zval = CLint*SF1(zchr)*SF2.LM(zchr)/Protein_conc*Val_CLh_unit_conv     
-                                                                    zval <- round(zval, digits = Digits)
-                                                                    return(zval)}
+# Calculate CLint,s
+Rawdata <- Rawdata %>% mutate(CLint_s_LM = CLint_scaled.LM(Col_clint_lm, Col_species, Val_CLint_s_digit),
+                              CLint_s_hep = CLint_scaled.hep(Col_clint_hep, Col_species, Val_CLint_s_digit)
+                              )
 
-#Test to see if the fuctions are working
-#CLint_scaled.hep(4.74, "Rat", 1, 2)
-#CLint_scaled.hep(4.74, "Rat", 0.5, 2)
-#CLint_scaled.hep(4.74, "Human", 0.5, 2)
-#CLint_scaled.LM(54, "Rat", 0.25, 2)
-#CLint_scaled.LM(54, "Rat", 1, 2)
-#CLint_scaled.LM(54, "Human", 1, 2)
-
-List_CLint_s <- 1                                           # Initialize the variable for loop, please note that the unit of CLint,s is L/hr/kg 
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLint_s[x] <- ifelse(Col_matrix[x] %in% "Hepatocytes", 
-                                                 CLint_scaled.hep(Col_clint[x],zspecies, Val_cell_density, Val_CLint_s_digit), 
-                                                 CLint_scaled.LM(Col_clint[x], Val_protein_conc, Val_CLint_s_digit))}
-
-## Create function for different IVIVE methods
-IVIVE <- function(CLint_s, Species, Digits) { zchr <- paste(Species)
-                                              zval = Qh(zchr)*CLint_s/(Qh(zchr)+CLint_s)
+# Create Functions for IVIVE
+IVIVE <- function(CLint_s, Species, Digits) { zval = Qh(Species)*CLint_s/(Qh(Species)+CLint_s)
                                               zval <- round(zval, digits = Digits)
                                               return(zval)}
 
-IVIVE.fup <- function(CLint_s, Species, fu_p, Digits) { zchr <- paste(Species)
-                                                        zval = Qh(zchr)*CLint_s*fu_p/(Qh(zchr)+CLint_s*fu_p)
+IVIVE.fup <- function(CLint_s, Species, fu_p, Digits) { zval = Qh(Species)*CLint_s*fu_p/(Qh(Species)+CLint_s*fu_p)
                                                         zval <- round(zval, digits = Digits)
                                                         return(zval)}
 
-IVIVE.fup.fuinc <- function(CLint_s, Species, fu_p, fu_inc, Digits) { zchr <- paste(Species)
-                                                                      zval = Qh(zchr)*CLint_s*(fu_p/fu_inc)/(Qh(zchr)+CLint_s*(fu_p/fu_inc))
+IVIVE.fup.fuinc <- function(CLint_s, Species, fu_p, fu_inc, Digits) { zval = Qh(Species)*CLint_s*(fu_p/fu_inc)/(Qh(Species)+CLint_s*(fu_p/fu_inc))
                                                                       zval <- round(zval, digits = Digits)
                                                                       return(zval)}
 
@@ -222,144 +168,102 @@ F1.acidic <- function(pKa, pH_p, pH_hep) { Val3 <- 1/(1+10^(pH_p - pKa))
                                            zval <- round(zval, digits = 1)
                                            return(zval)}
 
-IVIVE.F1 <- function(CLint_s, Species, F1, Digits) { zchr <- paste(Species)
-                                                     zval = Qh(zchr)*CLint_s*F1/(Qh(zchr)+CLint_s*F1)
+IVIVE.F1 <- function(CLint_s, Species, F1, Digits) { zval = Qh(Species)*CLint_s*F1/(Qh(Species)+CLint_s*F1)
                                                      zval <- round(zval, digits = Digits)
                                                      return(zval)}
 
-IVIVE.fup.F1 <- function(CLint_s, Species, fu_p, F1, Digits) { zchr <- paste(Species)
-                                                               zval = Qh(zchr)*CLint_s*fu_p*F1/(Qh(zchr)+CLint_s*fu_p*F1)
+IVIVE.fup.F1 <- function(CLint_s, Species, fu_p, F1, Digits) { zval = Qh(Species)*CLint_s*fu_p*F1/(Qh(Species)+CLint_s*fu_p*F1)
                                                                zval <- round(zval, digits = Digits)
                                                                return(zval)}
 
-IVIVE.fup.fuinc.F1 <- function(CLint_s, Species, fu_p, fu_inc, F1, Digits) { zchr <- paste(Species)
-                                                                             zval = Qh(zchr)*CLint_s*(fu_p/fu_inc)*F1/(Qh(zchr)+CLint_s*(fu_p/fu_inc)*F1)
+IVIVE.fup.fuinc.F1 <- function(CLint_s, Species, fu_p, fu_inc, F1, Digits) { zval = Qh(Species)*CLint_s*(fu_p/fu_inc)*F1/(Qh(Species)+CLint_s*(fu_p/fu_inc)*F1)
                                                                              zval <- round(zval, digits = Digits)
                                                                              return(zval)}
-#Test to see if the fuctions are working
-# IVIVE(1.54, "Rat", 3)
-# IVIVE.fup(1.54, "Rat", 0.327, 2)
-# IVIVE.fup.fuinc(1.54, "Rat", 0.327, 0.966, 2)
-# F1.basic(9.7, 7.4, 7.0)
-# F1.acidic(4, 7.4, 7.0)
-# IVIVE.F1(8.514, "Human", 2.5, 2)
-# IVIVE.fup.F1(8.514, "Human", 0.059, 2.5, 2)
-# IVIVE.fup.fuinc.F1(8.514, "Human", 0.141, 2.5, 2)
+
+CL_class <- function(CL, Cutoff_low_CL, Cutoff_high_CL) { zval = ifelse(CL < Cutoff_low_CL, "Low",
+                                                                     ifelse(CL > Cutoff_high_CL, "High", "Medium")
+                                                                 )
+                                                          return(zval)
+                                                        }
 
 # Calculate F1
-List_F1_cpKa <- 1                                                            # Initialize the variable for loop 
-for (x in 1:Num_cpd) { zpKatype <- Col_pKa_type[x]
-                       zpKa <- Col_c_pKa[x]
-                       List_F1_cpKa[x] <- ifelse(Col_pKa_type[x] %in% "Basic", F1.basic(zpKa, Val_pH_plasma, Val_pH_heps),
-                                            ifelse(Col_pKa_type[x] %in% "Acidic", F1.acidic(zpKa, Val_pH_plasma, Val_pH_heps), 1))}
+Rawdata <- Rawdata %>% mutate(F1 = ifelse(pKa_Type == "Basic", F1.basic(c_pKa, Val_pH_plasma, Val_pH_heps),
+                                          ifelse(pKa_Type == "Acidic", F1.acidic(c_pKa, Val_pH_plasma, Val_pH_heps), 1))
+                              )
 
-Rawdata <- mutate(Rawdata, F1 = List_F1_cpKa)
+# Calculate CLh
+Rawdata <- mutate(Rawdata, 
+                  CLh_LM = IVIVE(CLint_s_LM, Species, Val_CLh_digit),
+                  CLh_LM_cfup = IVIVE.fup(CLint_s_LM, Species, c_fup, Val_CLh_digit),
+                  CLh_LM_cfup_cfumic_Austin = IVIVE.fup.fuinc(CLint_s_LM, Species,c_fup, cfu_mic_Austin_logP_D, Val_CLh_digit),
+                  CLh_LM_cfup_cfumic_Houston = IVIVE.fup.fuinc(CLint_s_LM, Species,c_fup, cfu_mic_Houston_logP_D, Val_CLh_digit),
+                  CLh_LM_cfup_cfumic_Turner = IVIVE.fup.fuinc(CLint_s_LM, Species,c_fup, cfu_mic_Turner_logP, Val_CLh_digit),
+                  CLh_hep = IVIVE(CLint_s_hep, Species, Val_CLh_digit),
+                  CLh_hep_cfup = IVIVE.fup(CLint_s_hep, Species,c_fup, Val_CLh_digit), 
+                  CLh_hep_cfup_cfuhep_Austin = IVIVE.fup.fuinc(CLint_s_hep, Species,c_fup, cfu_hep_Austin_logP_D, Val_CLh_digit), 
+                  CLh_hep_cfup_cfuhep_Austin_fumic = IVIVE.fup.fuinc(CLint_s_hep, Species,c_fup, cfu_hep_Austin_fu_mic, Val_CLh_digit),
+                  CLh_hep_cfup_cfuhep_Kilford = IVIVE.fup.fuinc(CLint_s_hep, Species, c_fup, cfu_hep_Kilford_logP_D, Val_CLh_digit),
+                  CLh_hep_F1 = IVIVE.F1(CLint_s_hep, Species, F1, Val_CLh_digit),
+                  CLh_hep_cfup_F1 = IVIVE.fup.F1(CLint_s_hep, Species, c_fup, F1, Val_CLh_digit)
+                  )
 
-## IVIVE with no correction, fu,p and fu,p + fu,inc
-List_CLh <- 1                                                                # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh[x] <- IVIVE(List_CLint_s[x], zspecies, Val_CLh_digit)}
-
-List_CLh_cfup <- 1                                                           # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh_cfup[x] <- IVIVE.fup(List_CLint_s[x], zspecies, 
-                                                     Col_c_fup[x], Val_CLh_digit)}
-
-List_CLh_cfup_cfuhep_Austin <- 1                                             # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh_cfup_cfuhep_Austin[x] <- IVIVE.fup.fuinc(List_CLint_s[x], zspecies, 
-                                                                         Col_c_fup[x], List_cfu_hep_Austin[x], Val_CLh_digit)}
-
-List_CLh_cfup_cfuhep_Kilford <- 1                                            # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh_cfup_cfuhep_Kilford[x] <- IVIVE.fup.fuinc(List_CLint_s[x], zspecies, 
-                                                                        Col_c_fup[x], List_cfu_hep_Kilford[x], Val_CLh_digit)}
-
-List_CLh_cfup_cfuhep_Austin_fumic <- 1                                       # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh_cfup_cfuhep_Austin_fumic[x] <- IVIVE.fup.fuinc(List_CLint_s[x], zspecies, 
-                                                                               Col_c_fup[x], List_cfu_hep_Austin_fumic[x], Val_CLh_digit)}
-
-List_CLh_cfup_cfumic_Austin <- 1                                             # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh_cfup_cfumic_Austin[x] <- IVIVE.fup.fuinc(List_CLint_s[x], zspecies, 
-                                                                         Col_c_fup[x], List_cfu_mic_Austin[x], Val_CLh_digit)}
-
-List_CLh_cfup_cfumic_Houston <- 1                                            # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh_cfup_cfumic_Houston[x] <- IVIVE.fup.fuinc(List_CLint_s[x], zspecies, 
-                                                                          Col_c_fup[x], List_cfu_mic_Houston[x], Val_CLh_digit)}
-
-List_CLh_cfup_cfumic_Turner <- 1                                             # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh_cfup_cfumic_Turner[x] <- IVIVE.fup.fuinc(List_CLint_s[x], zspecies, 
-                                                                         Col_c_fup[x], List_cfu_mic_Turner[x], Val_CLh_digit)}
-
-# IVIVE using F1 or fup + F1 
-List_CLh_F1 <- 1                                                             # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh_F1[x] <- IVIVE.F1(List_CLint_s[x], zspecies, 
-                                                  List_F1_cpKa[x], Val_CLh_digit)}
-
-List_CLh_cfup_F1 <- 1                                                        # Initialize the variable for loop
-for (x in 1:Num_cpd) { zspecies <- Col_species[x]                             
-                       List_CLh_cfup_F1[x] <- IVIVE.fup.F1(List_CLint_s[x], zspecies, 
-                                                           Col_c_fup[x], List_F1_cpKa[x], Val_CLh_digit)}
-
-# Compile all CLh values using different IVIVE methods
-Rawdata <- mutate(Rawdata, CLh = List_CLh,
-                           CLh_cfup = List_CLh_cfup, 
-                           CLh_cfup_cfuhep_Austin = List_CLh_cfup_cfuhep_Austin, 
-                           CLh_cfup_cfuhep_Austin_fumic = List_CLh_cfup_cfuhep_Austin_fumic,
-                           CLh_cfup_cfuhep_Kilford = List_CLh_cfup_cfuhep_Kilford,
-                           CLh_cfup_cfumic_Austin = List_CLh_cfup_cfumic_Austin,
-                           CLh_cfup_cfumic_Houston = List_CLh_cfup_cfumic_Houston,
-                           CLh_cfup_cfumic_Turner = List_CLh_cfup_cfumic_Turner,
-                           CLh_F1 = List_CLh_F1,
-                           CLh_cfup_F1 = List_CLh_cfup_F1)
-
-# Calculate % Extraction Ratio (ER)
+# Calculate %ER
 List_Qh <- sapply(Col_species, Qh)
-Rawdata <- mutate(Rawdata, ER = List_CLh/List_Qh*100,
-                  Pct_ER_cfup = List_CLh_cfup/List_Qh*100, 
-                  Pct_ER_cfup_cfuhep_Austin = List_CLh_cfup_cfuhep_Austin/List_Qh*100, 
-                  Pct_ER_cfup_cfuhep_Austin_fumic = List_CLh_cfup_cfuhep_Austin_fumic/List_Qh*100,
-                  Pct_ER_cfup_cfuhep_Kilford = List_CLh_cfup_cfuhep_Kilford/List_Qh*100,
-                  Pct_ER_cfup_cfumic_Austin = List_CLh_cfup_cfumic_Austin/List_Qh*100,
-                  Pct_ER_cfup_cfumic_Houston = List_CLh_cfup_cfumic_Houston/List_Qh*100,
-                  Pct_ER_cfup_cfumic_Turner = List_CLh_cfup_cfumic_Turner/List_Qh*100,
-                  Pct_ER_F1 = List_CLh_F1/List_Qh*100,
-                  Pct_ER_cfup_F1 = List_CLh_cfup_F1/List_Qh*100)
+Rawdata <- mutate(Rawdata, 
+                  Pct_ER_LM = CLh_LM/List_Qh*100,
+                  Pct_ER_LM_cfup = CLh_LM_cfup/List_Qh*100,
+                  Pct_ER_LM_cfup_cfumic_Austin = CLh_LM_cfup_cfumic_Austin/List_Qh*100,
+                  Pct_ER_LM_cfup_cfumic_Houston = CLh_LM_cfup_cfumic_Houston/List_Qh*100,
+                  Pct_ER_LM_cfup_cfumic_TurnER_LM = CLh_LM_cfup_cfumic_Turner/List_Qh*100,
+                  Pct_ER_hep = CLh_hep/List_Qh*100,
+                  Pct_ER_hep_cfup = CLh_hep_cfup/List_Qh*100, 
+                  Pct_ER_hep_cfup_cfuhep_Austin = CLh_hep_cfup_cfuhep_Austin/List_Qh*100, 
+                  Pct_ER_hep_cfup_cfuhep_Austin_fumic = CLh_hep_cfup_cfuhep_Austin_fumic/List_Qh*100,
+                  Pct_ER_hep_cfup_cfuhep_Kilford = CLh_hep_cfup_cfuhep_Kilford/List_Qh*100,
+                  Pct_ER_hep_F1 = CLh_hep_F1/List_Qh*100,
+                  Pct_ER_hep_cfup_F1 = CLh_hep_cfup_F1/List_Qh*100
+                  )
 
-# Calculate AFE: CLh(predicted)/CLh(observed)
-Rawdata <- mutate(Rawdata, AFE_no_fu_correction = List_CLh/Col_CLobs,
-                  AFE_fup = List_CLh_cfup/Col_CLobs, 
-                  AFE_fup_fuhep_Austin = List_CLh_cfup_cfuhep_Austin/Col_CLobs, 
-                  AFE_fup_fuhep_Austin_fumic = List_CLh_cfup_cfuhep_Austin_fumic/Col_CLobs,
-                  AFE_fup_fuhep_Kilford = List_CLh_cfup_cfuhep_Kilford/Col_CLobs,
-                  AFE_fup_fumic_Austin = List_CLh_cfup_cfumic_Austin/Col_CLobs,
-                  AFE_fup_fumic_Houston = List_CLh_cfup_cfumic_Houston/Col_CLobs,
-                  AFE_fup_fumic_Turner = List_CLh_cfup_cfumic_Turner/Col_CLobs,
-                  AFE_F1 = List_CLh_F1/Col_CLobs,
-                  AFE_fup_F1 = List_CLh_cfup_F1/Col_CLobs)
+# Calculate AFE ( = predicted CL/Observed CL)
+Rawdata <- mutate(Rawdata, 
+                  AFE_LM = CLh_LM/Col_CLobs,
+                  AFE_LM_cfup = CLh_LM_cfup/Col_CLobs,
+                  AFE_LM_cfup_cfumic_Austin = CLh_LM_cfup_cfumic_Austin/Col_CLobs,
+                  AFE_LM_cfup_cfumic_Houston = CLh_LM_cfup_cfumic_Houston/Col_CLobs,
+                  AFE_LM_cfup_cfumic_Turner = CLh_LM_cfup_cfumic_Turner/Col_CLobs,
+                  AFE_hep = CLh_hep/Col_CLobs,
+                  AFE_hep_cfup = CLh_hep_cfup/Col_CLobs, 
+                  AFE_hep_cfup_cfuhep_Austin = CLh_hep_cfup_cfuhep_Austin/Col_CLobs, 
+                  AFE_hep_cfup_cfuhep_Austin_fumic = CLh_hep_cfup_cfuhep_Austin_fumic/Col_CLobs,
+                  AFE_hep_cfup_cfuhep_Kilford = CLh_hep_cfup_cfuhep_Kilford/Col_CLobs,
+                  AFE_hep_F1 = CLh_hep_F1/Col_CLobs,
+                  AFE_hep_cfup_F1 = CLh_hep_cfup_F1/Col_CLobs
+                  )
 
-# Format values to desired decimal places
-View(colnames(Rawdata))
-Rawdata[ ,55:74] <- round(Rawdata[ ,55:74], digits = 1)     
-Rawdata[ ,c(5:6)] <- round(Rawdata[ ,c(5:6)], digits = 2)     
-Rawdata[ ,c(9, 38:43)] <- round(Rawdata[ ,c(9, 38:43)], digits = 3) 
-       
-IVIVE_CLh <- Rawdata[ ,c(1:6, 8:12, 37:74)]
-View(IVIVE_CLh)
+# CL Classification
+Rawdata <- Rawdata %>% mutate(CL_Class_CLobs = CL_class(CLobs, List_Qh*Val_ER_low_CL, List_Qh*Val_ER_high_CL),
+                              CL_Class_CLint_u_cfumic_Austin = CL_class(CLint_u_LM_Austin, Val_CLint_u_LM_low_CL, Val_CLint_u_LM_high_CL),
+                              CL_Class_CLint_u_cfumic_Houston = CL_class(CLint_u_LM_Houston, Val_CLint_u_LM_low_CL, Val_CLint_u_LM_high_CL),
+                              CL_Class_CLint_u_cfumic_Turner = CL_class(CLint_u_LM_Turner, Val_CLint_u_LM_low_CL, Val_CLint_u_LM_high_CL),
+                              CL_Class_Clint_u_cfuhep_Austin = CL_class(CLint_u_hep_Austin, Val_CLint_u_hep_low_CL, Val_CLint_u_hep_high_CL),
+                              CL_Class_Clint_u_cfuhep_Austin_fumic = CL_class(CLint_u_hep_Austin_fumic, Val_CLint_u_hep_low_CL, Val_CLint_u_hep_high_CL),
+                              CL_Class_Clint_u_cfuhep_Kilford = CL_class(CLint_u_hep_Kilford, Val_CLint_u_hep_low_CL, Val_CLint_u_hep_high_CL),
+                              )
 
+# Round values to desired digits
+# View(colnames(Rawdata))
+Rawdata[ ,65:88] <- round(Rawdata[ ,65:88], digits = 1)     
+Rawdata[ ,c(4:6,44:51,53:64)] <- round(Rawdata[ ,c(4:6,44:51,53:64)], digits = 2)     
+Rawdata[ ,c(8:11, 38:43)] <- round(Rawdata[ ,c(8:11, 38:43)], digits = 3) 
+
+# Export Processed Data to Excel File Format
 Val_current_date <- Sys.Date()                                                # Get the current date to attach to the file name
-write_xlsx(IVIVE_CLh,                                                         # Export a short version + current data
-           paste(Val_current_date, " IVIVE_CLh", ".xlsx", sep = ""))  
-write_xlsx(Rawdata,                                                           # Export full version + current date
-           paste(Val_current_date, " IVIVE_CLh_all", ".xlsx", sep = ""))
-write_xlsx(Rawdata,                                                           # Export full version (will overwrite the old file)
-           "IVIVE_CLh_all.xlsx")
 
+write_xlsx(Rawdata,                                                           # Export full version + current date
+           paste(Val_current_date, " IVIVE_CLh", ".xlsx", sep = ""))
+
+write_xlsx(Rawdata,                                                           # Export full version (will overwrite the old file)
+           "IVIVE_CLh.xlsx")
 
 ##### CLEAN UP ######
 
